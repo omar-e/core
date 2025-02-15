@@ -16,16 +16,10 @@ services:
     environment:
       # Timezone
       - TZ=${CCAT_TIMEZONE:-UTC}
-    volumes:
+    #volumes:
     #  - ./core:/app
-       - memory-data:/app/cat/data/local_vector_memory
-       - model-data:/app/cat/data/models/
     command:
       - python
       - "-m"
       - "cat.main"
     restart: unless-stopped
-
-volumes:
-  model-data:
-  memory-data:    

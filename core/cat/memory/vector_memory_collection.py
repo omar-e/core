@@ -102,7 +102,7 @@ class VectorMemoryCollection:
                 size=self.embedder_size, distance=Distance.COSINE
             ),
             # hybrid mode: original vector on Disk, quantized vector in RAM
-            optimizers_config=OptimizersConfigDiff(memmap_threshold=20000),
+            optimizers_config=OptimizersConfigDiff(memmap_threshold=200000),
             quantization_config=ScalarQuantization(
                 scalar=ScalarQuantizationConfig(
                     type=ScalarType.INT8, quantile=0.95, always_ram=True

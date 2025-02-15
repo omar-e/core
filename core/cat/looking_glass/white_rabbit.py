@@ -35,7 +35,7 @@ class WhiteRabbit:
         }
 
         # Define basic rules for jobs
-        job_defaults = {"coalesce": False, "max_instances": 5}
+        job_defaults = {"coalesce": False, "max_instances": 10}
 
         # Creating the effective scheduler
         self.scheduler = BackgroundScheduler(
@@ -54,7 +54,7 @@ class WhiteRabbit:
 
         # Start the scheduler
         try:
-            self.scheduler.start()
+            #self.scheduler.start()
             log.info("WhiteRabbit: Scheduler started")
         except Exception as e:
             log.error("WhiteRabbit: Error during scheduler start: ", e)

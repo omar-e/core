@@ -35,7 +35,7 @@ class WhiteRabbit:
         }
 
         # Define basic rules for jobs
-        job_defaults = {"coalesce": False, "max_instances": 10}
+        job_defaults = {"coalesce": False, "max_instances": 5}
 
         # Creating the effective scheduler
         self.scheduler = BackgroundScheduler(

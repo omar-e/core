@@ -105,7 +105,7 @@ class VectorMemoryCollection:
             optimizers_config=OptimizersConfigDiff(memmap_threshold=20000),
             quantization_config=ScalarQuantization(
                 scalar=ScalarQuantizationConfig(
-                    type=ScalarType.INT8, quantile=0.95, always_ram=False
+                    type=ScalarType.INT8, quantile=0.95, always_ram=True
                 )
             ),
             # shard_number=3,

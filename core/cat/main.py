@@ -30,6 +30,7 @@ if __name__ == "__main__":
         port=80,
         use_colors=True,
         workers=2,
+        limit_max_requests=100,
         log_level=get_env("CCAT_LOG_LEVEL").lower(),
         **debug_config,
         **proxy_pass_config,

@@ -82,17 +82,16 @@ class VectorMemoryCollection:
 
     def create_db_collection_if_not_exists(self):
         # is collection present in DB?
-        # collections_response = self.client.get_collections()
-        # for c in collections_response.collections:
-        #     if c.name == self.collection_name:
-        #         # collection exists. Do nothing
-        #         log.info(
-        #             f"Collection '{self.collection_name}' already present in vector store"
-        #         )
-        #         return
+        collections_response = self.client.get_collections()
+        for c in collections_response.collections:
+            if c.name == self.collection_name:
+                # collection exists. Do nothing
+                log.info(
+                    f"Collection '{self.collection_name}' already present in vector store"
+                )
+                return
 
-        # self.create_collection()
-        return
+        self.create_collection()
 
     # create collection
     def create_collection(self):
@@ -106,7 +105,7 @@ class VectorMemoryCollection:
             optimizers_config=OptimizersConfigDiff(memmap_threshold=20000),
             quantization_config=ScalarQuantization(
                 scalar=ScalarQuantizationConfig(
-                    type=ScalarType.INT8, quantile=0.95, always_ram=True
+                    type=ScalarType.INT8, quantile=0.95, always_ram=False
                 )
             ),
             # shard_number=3,

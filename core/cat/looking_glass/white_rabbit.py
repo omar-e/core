@@ -54,7 +54,7 @@ class WhiteRabbit:
 
         # Start the scheduler
         try:
-            #self.scheduler.start()
+            self.scheduler.start()
             log.info("WhiteRabbit: Scheduler started")
         except Exception as e:
             log.error("WhiteRabbit: Error during scheduler start: ", e)

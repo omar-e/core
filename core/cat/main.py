@@ -29,7 +29,7 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=80,
         use_colors=True,
-        workers=2,
+        workers=1,
         limit_max_requests=100,
         log_level=get_env("CCAT_LOG_LEVEL").lower(),
         **debug_config,

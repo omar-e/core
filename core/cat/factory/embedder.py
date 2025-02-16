@@ -5,7 +5,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from langchain_community.embeddings import FakeEmbeddings, FastEmbedEmbeddings
 from langchain_openai import OpenAIEmbeddings, AzureOpenAIEmbeddings
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_google_vertexai import VertexAIEmbeddings
 from fastembed import TextEmbedding
 from cat.factory.custom_embedder import DumbEmbedder, CustomOpenAIEmbeddings
 from cat.mad_hatter.mad_hatter import MadHatter

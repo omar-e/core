@@ -28,7 +28,6 @@ dependencies = [
     "langchain-openai==0.1.7",
     "langchain-anthropic==0.1.23",
     "langchain-google-genai==1.0.8",
-    "langchain-google-vertexai==2.0.13",
     "langchain-google-genai[images]",
     "langchain-cohere==0.1.5",
     "huggingface-hub>=0.25.1",

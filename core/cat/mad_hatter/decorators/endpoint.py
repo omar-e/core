@@ -30,16 +30,17 @@ class CustomEndpoint:
 
     def activate(self, cheshire_cat_api):
 
-        log.info(f"Activating custom endpoint {self.methods} {self.name}")
 
         self.cheshire_cat_api = cheshire_cat_api
 
         # Set the fastapi api_route into the Custom Endpoint
         for api_route in self.cheshire_cat_api.routes:
             if api_route.path == self.name and api_route.methods == self.methods:
-                log.info(f"There is already an active {self.methods} endpoint with path {self.name}")
+                log.warning(f"There is already an active {self.methods} endpoint with path {self.name}")
                 return
 
+        log.info(f"Activating custom endpoint {self.methods} {self.name}")
+        
         plugins_router = APIRouter()
         plugins_router.add_api_route(
             path=self.path,
@@ -51,8 +52,8 @@ class CustomEndpoint:
 
         try:
             self.cheshire_cat_api.include_router(plugins_router, prefix=self.prefix)
-        except BaseException as e:
-            log.error(f"Error activating custom endpoint [{self.methods} {self.name}]: {e}")
+        except Exception:
+            log.error(f"Error activating custom endpoint {self.methods} {self.name}")
             return
 
         self.cheshire_cat_api.openapi_schema = None  # Flush the cache of openapi schema
@@ -191,6 +192,64 @@ class Endpoint:
             **kwargs,
         )
 
+    def put(
+        cls,
+        path,
+        prefix=default_prefix,
+        response_model=None,
+        tags=default_tags,
+        **kwargs,
+    ) -> Callable:
+        """
+        Define a custom API endpoint for PUT operation, parameters are the same as FastAPI path operation.
+        Examples:
+            .. code-block:: python
+                from cat.mad_hatter.decorators import endpoint
+                from pydantic import BaseModel
+    
+                class Item(BaseModel):
+                    name: str
+                    description: str
+    
+                @endpoint.put(path="/hello")
+                def my_put_endpoint(item: Item):
+                    return {"Hello": item.name, "Description": item.description}
+        """
+        return cls.endpoint(
+            path=path,
+            methods={"PUT"},
+            prefix=prefix,
+            response_model=response_model,
+            tags=tags,
+            **kwargs,
+        )
+    
+    def delete(
+        cls, 
+        path,
+        prefix=default_prefix,
+        response_model=None,
+        tags=default_tags,
+        **kwargs,
+    ) -> Callable:
+        """
+        Define a custom API endpoint for DELETE operation, parameters are the same as FastAPI path operation.
+        Examples:
+            .. code-block:: python
+                from cat.mad_hatter.decorators import endpoint
+    
+                @endpoint.delete(path="/hello/{item_id}")
+                def my_delete_endpoint(item_id: int):
+                    return {"message": f"Deleted item {item_id}"}
+        """
+        return cls.endpoint(
+            path=path,
+            methods={"DELETE"},
+            prefix=prefix,
+            response_model=response_model,
+            tags=tags,
+            **kwargs,
+        )
 
 endpoint = None
 

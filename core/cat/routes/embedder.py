@@ -24,7 +24,7 @@ EMBEDDER_SELECTED_NAME = "embedder_selected"
 @router.get("/settings")
 def get_embedders_settings(
     request: Request,
-    stray=check_permissions(AuthResource.EMBEDDER, AuthPermission.LIST),
+    cat=check_permissions(AuthResource.EMBEDDER, AuthPermission.LIST),
 ) -> Dict:
     """Get the list of the Embedders"""
 
@@ -71,7 +71,7 @@ def get_embedders_settings(
 def get_embedder_settings(
     request: Request,
     languageEmbedderName: str,
-    stray=check_permissions(AuthResource.EMBEDDER, AuthPermission.READ),
+    cat=check_permissions(AuthResource.EMBEDDER, AuthPermission.READ),
 ) -> Dict:
     """Get settings and schema of the specified Embedder"""
 
@@ -102,7 +102,7 @@ def upsert_embedder_setting(
     request: Request,
     languageEmbedderName: str,
     payload: Dict = Body({"openai_api_key": "your-key-here"}),
-    stray=check_permissions(AuthResource.EMBEDDER, AuthPermission.EDIT),
+    cat=check_permissions(AuthResource.EMBEDDER, AuthPermission.EDIT),
 ) -> Dict:
     """Upsert the Embedder setting"""
 
@@ -146,7 +146,7 @@ def upsert_embedder_setting(
     try:
         ccat.load_memory()
     except Exception as e:
-        log.error(e)
+        log.error("Error while changing embedder")
         crud.delete_settings_by_category(category=EMBEDDER_SELECTED_CATEGORY)
         crud.delete_settings_by_category(category=EMBEDDER_CATEGORY)
 
@@ -171,7 +171,7 @@ def upsert_embedder_setting(
             ccat.load_natural_language()
 
         raise HTTPException(
-            status_code=400, detail={"error": utils.explicit_error_message(e)}
+            status_code=400, detail={"error": utils.explicit_error_message(f"Error while changing embedder: {e}")}
         )
     # recreate tools embeddings
     ccat.mad_hatter.find_plugins()

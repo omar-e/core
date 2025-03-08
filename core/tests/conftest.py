@@ -1,5 +1,4 @@
 
-import asyncio
 import pytest
 import os
 import shutil
@@ -14,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from cat.looking_glass.cheshire_cat import CheshireCat
 from cat.looking_glass.stray_cat import StrayCat
+from cat.auth.permissions import AuthUserInfo
 from cat.db.database import Database
 import cat.utils as utils
 from cat.memory.vector_memory import VectorMemory
@@ -66,6 +66,7 @@ def clean_up_mocks():
         "tests/mocks/mock_plugin/settings.json",
         "tests/mocks/mock_plugin_folder/mock_plugin",
         "tests/mocks/empty_folder",
+        "/tmp_test",
     ]
     for tbr in to_be_removed:
         if os.path.exists(tbr):
@@ -84,8 +85,12 @@ def client(monkeypatch) -> Generator[TestClient, Any, None]:
     
     # clean up tmp files and folders
     clean_up_mocks()
+    
     # env variables
     os.environ["CCAT_DEBUG"] = "false" # do not autoreload
+    # in case tests setup a file system cache, use a different file system cache dir
+    os.environ["CCAT_CACHE_DIR"] = "/tmp_test"
+
     # monkeypatch classes
     mock_classes(monkeypatch)
     # delete all singletons!!!
@@ -139,26 +144,29 @@ def just_installed_plugin(client):
     # clean up of zip file and mock_plugin_folder is done for every test automatically (see client fixture)
 
 # fixtures to test the main agent
-@pytest.fixture
+@pytest.fixture(scope="function")
 def main_agent(client):
     yield CheshireCat().main_agent  # each test receives as argument the main agent instance
 
 # fixture to have available an instance of StrayCat
-@pytest.fixture
+@pytest.fixture(scope="function")
 def stray(client):
-    user_id = "Alice"
-    stray_cat = StrayCat(user_id=user_id, main_loop=asyncio.new_event_loop())
-    stray_cat.working_memory.user_message_json = {"user_id": user_id, "text": "meow"}
+    user_data = AuthUserInfo(
+        id="Alice",
+        name="Alice"
+    )
+    stray_cat = StrayCat(user_data)
+    stray_cat.working_memory.user_message_json = {"user_id": user_data.id, "text": "meow"}
     yield stray_cat
 
 # autouse fixture will be applied to *all* the tests
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True, scope="function")
 def apply_warning_filters():
     # ignore deprecation warnings due to langchain not updating to pydantic v2
     warnings.filterwarnings("ignore", category=PydanticDeprecatedSince20)
 
 #fixture for mock time.time function
-@pytest.fixture
+@pytest.fixture(scope="function")
 def patch_time_now(monkeypatch):
 
     def mytime():
@@ -167,7 +175,7 @@ def patch_time_now(monkeypatch):
     monkeypatch.setattr(time, 'time', mytime)
 
 #fixture for mad hatter with mock plugin installed
-@pytest.fixture
+@pytest.fixture(scope="function")
 def mad_hatter_with_mock_plugin(client):  # client here injects the monkeypatched version of the cat
 
     # each test is given the mad_hatter instance (it's a singleton)

@@ -11,7 +11,7 @@ from tests.utils import create_mock_plugin_zip
 
 
 # this function will be run before each test function
-@pytest.fixture
+@pytest.fixture(scope="function")
 def mad_hatter(client):  # client here injects the monkeypatched version of the cat
     # each test is given the mad_hatter instance (it's a singleton)
     yield MadHatter()
@@ -77,7 +77,7 @@ def test_plugin_install(mad_hatter: MadHatter, plugin_is_flat):
     assert len(mad_hatter.plugins["mock_plugin"].hooks) == 3
     assert len(mad_hatter.plugins["mock_plugin"].tools) == 1
     assert len(mad_hatter.plugins["mock_plugin"].forms) == 1
-    assert len(mad_hatter.plugins["mock_plugin"].endpoints) == 4
+    assert len(mad_hatter.plugins["mock_plugin"].endpoints) == 6
 
     # tool found
     new_tool = mad_hatter.plugins["mock_plugin"].tools[0]

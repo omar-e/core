@@ -17,7 +17,7 @@ router = APIRouter()
 async def get_available_plugins(
     request: Request,
     query: str = None,
-    stray=check_permissions(AuthResource.PLUGINS, AuthPermission.LIST),
+    cat=check_permissions(AuthResource.PLUGINS, AuthPermission.LIST),
     # author: str = None, to be activated in case of more granular search
     # tag: str = None, to be activated in case of more granular search
 ) -> Dict:
@@ -81,7 +81,7 @@ async def get_available_plugins(
 async def install_plugin(
     request: Request,
     file: UploadFile,
-    stray=check_permissions(AuthResource.PLUGINS, AuthPermission.WRITE),
+    cat=check_permissions(AuthResource.PLUGINS, AuthPermission.WRITE),
 ) -> Dict:
     """Install a new plugin from a zip file"""
 
@@ -116,7 +116,7 @@ async def install_plugin(
 async def install_plugin_from_registry(
     request: Request,
     payload: Dict = Body({"url": "https://github.com/plugin-dev-account/plugin-repo"}),
-    stray=check_permissions(AuthResource.PLUGINS, AuthPermission.WRITE),
+    cat=check_permissions(AuthResource.PLUGINS, AuthPermission.WRITE),
 ) -> Dict:
     """Install a new plugin from registry"""
 
@@ -129,7 +129,6 @@ async def install_plugin_from_registry(
         ccat.mad_hatter.install_plugin(tmp_plugin_path)
     except Exception as e:
         log.error("Could not download plugin form registry")
-        log.error(e)
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
     return {"url": payload["url"], "info": "Plugin is being installed asynchronously"}
@@ -139,7 +138,7 @@ async def install_plugin_from_registry(
 async def toggle_plugin(
     plugin_id: str,
     request: Request,
-    stray=check_permissions(AuthResource.PLUGINS, AuthPermission.WRITE),
+    cat=check_permissions(AuthResource.PLUGINS, AuthPermission.WRITE),
 ) -> Dict:
     """Enable or disable a single plugin"""
 
@@ -155,13 +154,14 @@ async def toggle_plugin(
         ccat.mad_hatter.toggle_plugin(plugin_id)
         return {"info": f"Plugin {plugin_id} toggled"}
     except Exception as e:
+        log.error(f"Could not toggle plugin {plugin_id}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
 @router.get("/settings")
 async def get_plugins_settings(
     request: Request,
-    stray=check_permissions(AuthResource.PLUGINS, AuthPermission.READ),
+    cat=check_permissions(AuthResource.PLUGINS, AuthPermission.READ),
 ) -> Dict:
     """Returns the settings of all the plugins"""
 
@@ -180,9 +180,9 @@ async def get_plugins_settings(
             settings.append(
                 {"name": plugin.id, "value": plugin_settings, "schema": plugin_schema}
             )
-        except Exception as e:
+        except Exception:
             log.error(
-                f"Error loading {plugin} settings. The result will not contain the settings for this plugin. Error details: {e}"
+                f"Error loading plugin {plugin.id} settings. The result will not contain the settings for this plugin."
             )
 
     return {
@@ -194,7 +194,7 @@ async def get_plugins_settings(
 async def get_plugin_settings(
     request: Request,
     plugin_id: str,
-    stray=check_permissions(AuthResource.PLUGINS, AuthPermission.READ),
+    cat=check_permissions(AuthResource.PLUGINS, AuthPermission.READ),
 ) -> Dict:
     """Returns the settings of a specific plugin"""
 
@@ -221,7 +221,7 @@ async def upsert_plugin_settings(
     request: Request,
     plugin_id: str,
     payload: Dict = Body({"setting_a": "some value", "setting_b": "another value"}),
-    stray=check_permissions(AuthResource.PLUGINS, AuthPermission.EDIT),
+    cat=check_permissions(AuthResource.PLUGINS, AuthPermission.EDIT),
 ) -> Dict:
     """Updates the settings of a specific plugin"""
 
@@ -254,7 +254,7 @@ async def upsert_plugin_settings(
 async def get_plugin_details(
     plugin_id: str,
     request: Request,
-    stray=check_permissions(AuthResource.PLUGINS, AuthPermission.READ),
+    cat=check_permissions(AuthResource.PLUGINS, AuthPermission.READ),
 ) -> Dict:
     """Returns information on a single plugin"""
 
@@ -285,7 +285,7 @@ async def get_plugin_details(
 async def delete_plugin(
     plugin_id: str,
     request: Request,
-    stray=check_permissions(AuthResource.PLUGINS, AuthPermission.DELETE),
+    cat=check_permissions(AuthResource.PLUGINS, AuthPermission.DELETE),
 ) -> Dict:
     """Physically remove plugin."""
 

@@ -1,9 +1,10 @@
 import time
 import asyncio
-import traceback
 import tiktoken
 
 from typing import Literal, get_args, List, Dict, Union, Any
+
+from websockets.exceptions import ConnectionClosedOK
 
 from langchain.docstore.document import Document
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -11,50 +12,81 @@ from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers.string import StrOutputParser
 
-from fastapi import WebSocket
-
-from cat.log import log
+from cat.auth.permissions import AuthUserInfo
 from cat.looking_glass.cheshire_cat import CheshireCat
 from cat.looking_glass.callbacks import NewTokenHandler, ModelInteractionHandler
 from cat.memory.working_memory import WorkingMemory
 from cat.convo.messages import CatMessage, UserMessage, MessageWhy, EmbedderModelInteraction
 from cat.agents import AgentOutput
-from cat.auth.permissions import AuthUserInfo
+from cat.cache.cache_item import CacheItem
 from cat import utils
-from websockets.exceptions import ConnectionClosedOK
+from cat.log import log
 
 MSG_TYPES = Literal["notification", "chat", "error", "chat_token"]
 
-
 # The Stray cat goes around tools, hooks and endpoints... making troubles
 class StrayCat:
-    """User/session based object containing working memory and a few utility pointers"""
+    """Session object containing user data, conversation state and many utility pointers.
+    The framework creates an instance for every http request and websocket connection, making it available for plugins.
+
+    You will be interacting with an instance of this class directly from within your plugins:
+
+     - in `@hook`, `@tool` and `@endpoint` decorated functions will be passed as argument `cat` or `stray`
+     - in `@form` decorated classes you can access it via `self.cat`
+
+    Parameters
+    ----------
+    user_data : AuthUserInfo
+        User data object containing user information.
+    """
+
+    working_memory: WorkingMemory
+    """State machine containing the conversation state, acting as a simple dictionary / object.
+    Can be used in plugins to store and retrieve data to drive the conversation or do anything else.
+
+    Examples
+    --------
+    Store a value in the working memory during conversation
+    >>> cat.working_memory["location"] = "Rome"
+    or
+    >>> cat.working_memory.location = "Rome"
+
+    Retrieve a value in later conversation turns
+    >>> cat.working_memory["location"]
+    "Rome"
+    >>> cat.working_memory.location
+    "Rome"
+    """
 
     def __init__(
         self,
-        user_id: str,
-        main_loop,
-        user_data: AuthUserInfo = None,
-        ws: WebSocket = None,
+        user_data: AuthUserInfo
     ):
-        self.__user_id = user_id
+
+        # user data
+        self.__user_id = user_data.name # TODOV2: use id
         self.__user_data = user_data
-
-        self.working_memory = WorkingMemory()
-
-        # attribute to store ws connection
-        self.__ws = ws
-
-        self.__main_loop = main_loop
+        
+        # get working memory from cache or create a new one
+        self.load_working_memory_from_cache()
 
     def __repr__(self):
-        return f"StrayCat(user_id={self.user_id})"
+        return f"StrayCat(user_id={self.user_id}, user_name={self.user_data.name})"
 
     def __send_ws_json(self, data: Any):
         # Run the corutine in the main event loop in the main thread
         # and wait for the result
+
+        app = CheshireCat().fastapi_app
+        ws_manager = app.state.websocket_manager
+        ws_connection = ws_manager.get_connection(self.user_id)
+        if not ws_connection:
+            log.debug(f"No websocket connection is open for user {self.user_id}")
+            return
+
         asyncio.run_coroutine_threadsafe(
-            self.__ws.send_json(data), loop=self.__main_loop
+            ws_connection.send_json(data),
+            app.state.event_loop,
         ).result()
 
     def __build_why(self) -> MessageWhy:
@@ -86,24 +118,46 @@ class StrayCat:
         )
 
         return why
+    
+    def load_working_memory_from_cache(self):
+        """Load the working memory from the cache."""
+        
+        self.working_memory = \
+            self.cache.get_value(f"{self.user_id}_working_memory") or WorkingMemory()
 
-    def send_ws_message(self, content: str, msg_type: MSG_TYPES = "notification"):
+    def update_working_memory_cache(self):
+        """Update the working memory in the cache."""
+
+        updated_cache_item = CacheItem(f"{self.user_id}_working_memory", self.working_memory, -1)
+        self.cache.insert(updated_cache_item)
+
+    def send_ws_message(self, content: str | dict, msg_type: MSG_TYPES = "notification"):
         """Send a message via websocket.
 
-        This method is useful for sending a message via websocket directly without passing through the LLM
-        In case there is no connection the message is skipped and a warning is logged
+        This method is useful for sending a message via websocket directly without passing through the LLM.  
+        In case there is no connection the message is skipped and a warning is logged.
 
         Parameters
         ----------
         content : str
             The content of the message.
         msg_type : str
-            The type of the message. Should be either `notification`, `chat`, `chat_token` or `error`
-        """
+            The type of the message. Should be either `notification` (default), `chat`, `chat_token` or `error`
 
-        if self.__ws is None:
-            log.info(f"No websocket connection is open for user {self.user_id}")
-            return
+        Examples
+        --------
+        Send a notification via websocket
+        >>> cat.send_ws_message("Hello, I'm a notification!")
+
+        Send a chat message via websocket
+        >>> cat.send_ws_message("Meooow!", msg_type="chat")
+        
+        Send an error message via websocket
+        >>> cat.send_ws_message("Something went wrong", msg_type="error")
+
+        Send custom data
+        >>> cat.send_ws_message({"What day it is?": "It's my unbirthday"})
+        """
 
         options = get_args(MSG_TYPES)
 
@@ -119,18 +173,26 @@ class StrayCat:
         else:
             self.__send_ws_json({"type": msg_type, "content": content})
 
-    def send_chat_message(self, message: Union[str, CatMessage], save=False):
-        """Sends a chat message to the user using the active WebSocket connection.
-
+    def send_chat_message(self, message: str | CatMessage, save=False):
+        """Sends a chat message to the user using the active WebSocket connection.  
         In case there is no connection the message is skipped and a warning is logged
 
-        Args:
-            message (Union[str, CatMessage]): message to send
-            save (bool, optional): Save the message in the conversation history. Defaults to False.
+        Parameters
+        ----------
+        message: str, CatMessage
+            Message to send
+        save: bool | optional
+            Save the message in the conversation history. Defaults to False.
+
+        Examples
+        --------
+        Send a chat message during conversation from a hook, tool or form
+        >>> cat.send_chat_message("Hello, dear!")
+
+        Using a `CatMessage` object
+        >>> message = CatMessage(text="Hello, dear!", user_id=cat.user_id)
+        ... cat.send_chat_message(message)
         """
-        if self.__ws is None:
-            log.info(f"No websocket connection is open for user {self.user_id}")
-            return
 
         if isinstance(message, str):
             why = self.__build_why()
@@ -144,12 +206,18 @@ class StrayCat:
         self.__send_ws_json(message.model_dump())
 
     def send_notification(self, content: str):
-        """Sends a notification message to the user using the active WebSocket connection.
-
+        """Sends a notification message to the user using the active WebSocket connection.  
         In case there is no connection the message is skipped and a warning is logged
 
-        Args:
-            content (str): message to send
+        Parameters
+        ----------
+        content: str
+            Message to send
+
+        Examples
+        --------
+        Send a notification to the user
+        >>> cat.send_notification("It's late!")
         """
         self.send_ws_message(content=content, msg_type="notification")
 
@@ -158,12 +226,18 @@ class StrayCat:
 
         In case there is no connection the message is skipped and a warning is logged
 
-        Args:
-            error (Union[str, Exception]): message to send
-        """        
-        if self.__ws is None:
-            log.info(f"No websocket connection is open for user {self.user_id}")
-            return
+        Parameters
+        ----------
+        error: str, Exception
+            Message to send
+
+        Examples
+        --------
+        Send an error message to the user
+        >>> cat.send_error("Something went wrong!")
+        or
+        >>> cat.send_error(CustomException("Something went wrong!"))
+        """
 
         if isinstance(error, str):
             error_message = {
@@ -189,8 +263,13 @@ class StrayCat:
         Parameters
         ----------
         query : str, optional
-        The query used to make a similarity search in the Cat's vector memories. If not provided, the query
-        will be derived from the user's message.
+            The query used to make a similarity search in the Cat's vector memories.  
+            If not provided, the query will be derived from the last user's message.
+
+        Examples
+        --------
+        Recall memories from custom query
+        >>> cat.recall_relevant_memories_to_working_memory(query="What was written on the bottle?")
 
         Notes
         -----
@@ -222,12 +301,13 @@ class StrayCat:
         # Embed recall query
         recall_query_embedding = self.embedder.embed_query(recall_query)
         self.working_memory.recall_query = recall_query
-        
+
         # keep track of embedder model usage
         self.working_memory.model_interactions.append(
             EmbedderModelInteraction(
-                prompt=recall_query,
-                reply=recall_query_embedding,
+                prompt=[recall_query],
+                source=utils.get_caller_info(skip=1),
+                reply=recall_query_embedding, # TODO: should we avoid storing the embedding?
                 input_tokens=len(tiktoken.get_encoding("cl100k_base").encode(recall_query)),
             )
         )
@@ -293,21 +373,32 @@ class StrayCat:
         # hook to modify/enrich retrieved memories
         self.mad_hatter.execute_hook("after_cat_recalls_memories", cat=self)
 
-    def llm(self, prompt: str, stream: bool = False) -> str:
-        """Generate a response using the LLM model.
 
-        This method is useful for generating a response with both a chat and a completion model using the same syntax
+    def llm(self, prompt: str, stream: bool = False) -> str:
+        """Generate a response using the Large Language Model.
 
         Parameters
         ----------
         prompt : str
             The prompt for generating the response.
+        stream : bool
+            Whether to stream the tokens via websocket or not.
 
         Returns
         -------
         str
-            The generated response.
+            The generated LLM response.
 
+        Examples
+        -------
+        Detect profanity in a message
+        >>> message = cat.working_memory.user_message_json.text
+        ... cat.llm(f"Does this message contain profanity: '{message}'?  Reply with 'yes' or 'no'.")
+        "no"
+
+        Run the LLM and stream the tokens via websocket
+        >>> cat.llm("Tell me which way to go?", stream=True)
+        "It doesn't matter which way you go"
         """
 
         # should we stream the tokens?
@@ -316,7 +407,7 @@ class StrayCat:
             callbacks.append(NewTokenHandler(self))
 
         # Add a token counter to the callbacks
-        caller = utils.get_caller_info()
+        caller = utils.get_caller_info(return_short=False)
         callbacks.append(ModelInteractionHandler(self, caller or "StrayCat"))
 
         # here we deal with motherfucking langchain
@@ -344,35 +435,31 @@ class StrayCat:
         return output
 
     def __call__(self, message_dict):
-        """Call the StrayCat instance.
+        """Run the conversation turn.
 
-        This method is called on the user's message received from the client.
+        This method is called on the user's message received from the client.  
+        It is the main pipeline of the Cat, it is called automatically.
 
         Parameters
         ----------
         message_dict : dict
-            Dictionary received from the client.
-        save : bool, optional
-            If True, the user's message is stored in the chat history. Default is True.
+            Dictionary received from the client via http or websocket.
 
         Returns
         -------
         final_output : CatMessage
-            CatMessage object, the Cat's answer to be sent to the client.
-
-        Notes
-        -----
-        Here happens the main pipeline of the Cat. Namely, the Cat receives the user's input and recalls the memories.
-        The retrieved context is formatted properly and given in input to the Agent that uses the LLM to produce the
-        answer. This is formatted in a dictionary to be sent as a JSON via Websocket to the client.
-
+            CatMessage object, the Cat's answer to be sent back to the client.
         """
+
+        # Impose user_id as the one authenticated
+        # (ws message may contain a fake id)
+        message_dict["user_id"] = self.user_id
 
         # Parse websocket message into UserMessage obj
         user_message = UserMessage.model_validate(message_dict)
         log.info(user_message)
 
-        ### setup working memory
+        ### setup working memory for this convo turn
         # keeping track of model interactions
         self.working_memory.model_interactions = []
         # latest user message
@@ -403,9 +490,8 @@ class StrayCat:
         #   and store them in working_memory
         try:
             self.recall_relevant_memories_to_working_memory()
-        except Exception as e:
-            log.error(e)
-            traceback.print_exc(e)
+        except Exception:
+            log.error("Error during recall.")
 
             err_message = "An error occurred while recalling relevant memories."
 
@@ -414,7 +500,7 @@ class StrayCat:
                 "name": "VectorMemoryError",
                 "description": err_message,
             }
-
+        
         # reply with agent
         try:
             agent_output: AgentOutput = self.main_agent.execute(self)
@@ -436,7 +522,6 @@ class StrayCat:
                 output=unparsable_llm_output,
             )
 
-        log.info("Agent output returned to stray:")
         log.info(agent_output)
 
         self._store_user_message_in_episodic_memory(
@@ -468,7 +553,11 @@ class StrayCat:
 
     def run(self, user_message_json, return_message=False):
         try:
+            # run main flow
             cat_message = self.__call__(user_message_json)
+            # save working memory to cache
+            self.update_working_memory_cache()
+
             if return_message:
                 # return the message for HTTP usage
                 return cat_message
@@ -477,7 +566,6 @@ class StrayCat:
                 self.send_chat_message(cat_message)
         except Exception as e:
             log.error(e)
-            traceback.print_exc()
             if return_message:
                 return {"error": str(e)}
             else:
@@ -540,7 +628,6 @@ Allowed classes are:
 "{sentence}" -> """
 
         response = self.llm(prompt)
-        log.info(response)
 
         # find the closest match and its score with levenshtein distance
         best_label, score = min(
@@ -551,27 +638,13 @@ Allowed classes are:
         # set 0.5 as threshold - let's see if it works properly
         return best_label if score < 0.5 else None
 
-    def langchainfy_chat_history(self, latest_n: int = 10) -> List[BaseMessage]:
+    def langchainfy_chat_history(self, latest_n: int = 20) -> List[BaseMessage]:
         """Redirects to WorkingMemory.langchainfy_chat_history. Will be removed from this class in v2."""
         return self.working_memory.langchainfy_chat_history(latest_n)
     
-    def stringify_chat_history(self, latest_n: int = 10) -> str:
+    def stringify_chat_history(self, latest_n: int = 20) -> str:
         """Redirects to WorkingMemory.stringify_chat_history. Will be removed from this class in v2."""
         return self.working_memory.stringify_chat_history(latest_n)
-
-    async def close_connection(self):
-        if self.__ws:
-            try:
-                await self.__ws.close()
-            except RuntimeError as ex:
-                log.warning(ex)
-                if self.__ws:
-                    del self.__ws
-                    self.__ws = None
-
-    def reset_connection(self, connection):
-        """Reset the connection to the API service."""
-        self.__ws = connection
 
     def _store_user_message_in_episodic_memory(self, user_message_text: str):
         doc = Document(
@@ -592,37 +665,133 @@ Allowed classes are:
         )
 
     @property
-    def user_id(self):
+    def user_id(self) -> str:
+        """The user's id.
+        
+        Returns
+        -------
+        user_id : str
+            Current user's id.
+        """
         return self.__user_id
     
     @property
-    def user_data(self):
+    def user_data(self) -> AuthUserInfo:
+        """`AuthUserInfo` object containing user data.
+
+        Returns
+        -------
+        user_data : AuthUserInfo
+            Current user's data.
+        """
         return self.__user_data
     
     @property
     def _llm(self):
+        """Instance of langchain `LLM`.
+        Only use it if you directly want to deal with langchain, prefer method `cat.llm(prompt)` otherwise.
+        """
         return CheshireCat()._llm
 
     @property
     def embedder(self):
+        """Langchain `Embeddings` object.
+
+        Returns
+        -------
+        embedder : langchain `Embeddings`
+            Langchain embedder to turn text into a vector.
+
+
+        Examples
+        --------
+        >>> cat.embedder.embed_query("Oh dear!")
+        [0.2, 0.02, 0.4, ...]
+        """
         return CheshireCat().embedder
 
     @property
     def memory(self):
+        """Gives access to the long term memory, containing vector DB collections (episodic, declarative, procedural).
+
+        Returns
+        -------
+        memory : LongTermMemory
+            Long term memory of the Cat.
+
+
+        Examples
+        --------
+        >>> cat.memory.vectors.episodic
+        VectorMemoryCollection object for the episodic memory.
+        """
         return CheshireCat().memory
 
     @property
     def rabbit_hole(self):
+        """Gives access to the `RabbitHole`, to upload documents and URLs into the vector DB.
+
+        Returns
+        -------
+        rabbit_hole : RabbitHole
+            Module to ingest documents and URLs for RAG.
+
+
+        Examples
+        --------
+        >>> cat.rabbit_hole.ingest_file(...)
+        """
         return CheshireCat().rabbit_hole
 
     @property
     def mad_hatter(self):
+        """Gives access to the `MadHatter` plugin manager.
+
+        Returns
+        -------
+        mad_hatter : MadHatter
+            Module to manage plugins.
+
+
+        Examples
+        --------
+
+        Obtain the path in which your plugin is located
+        >>> cat.mad_hatter.get_plugin().path
+        /app/cat/plugins/my_plugin
+
+        Obtain plugin settings
+        >>> cat.mad_hatter.get_plugin().load_settings()
+        {"num_cats": 44, "rows": 6, "remainder": 0}
+        """
         return CheshireCat().mad_hatter
 
     @property
     def main_agent(self):
+        """Gives access to the default main agent.
+        """
         return CheshireCat().main_agent
 
     @property
     def white_rabbit(self):
+        """Gives access to `WhiteRabbit`, to schedule repeatable tasks.
+
+        Returns
+        -------
+        white_rabbit : WhiteRabbit
+            Module to manage cron tasks via `APScheduler`.
+
+        Examples
+        --------
+        Send a websocket message after 30 seconds
+        >>> def ring_alarm_api():
+        ...     cat.send_chat_message("It's late!")
+        ...
+        ... cat.white_rabbit.schedule_job(ring_alarm_api, seconds=30)
+        """
         return CheshireCat().white_rabbit
+    
+    @property
+    def cache(self):
+        """Gives access to internal cache."""
+        return CheshireCat().cache

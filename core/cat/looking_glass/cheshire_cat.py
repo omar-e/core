@@ -3,7 +3,7 @@ from typing import List, Dict
 from typing_extensions import Protocol
 
 from langchain.base_language import BaseLanguageModel
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableLambda
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers.string import StrOutputParser
@@ -27,6 +27,8 @@ from cat.memory.long_term_memory import LongTermMemory
 from cat.rabbit_hole import RabbitHole
 from cat.utils import singleton
 from cat import utils
+from cat.cache.cache_manager import CacheManager
+
 
 class Procedure(Protocol):
     name: str
@@ -44,7 +46,10 @@ class Procedure(Protocol):
 class CheshireCat:
     """The Cheshire Cat.
 
-    This is the main class that manages everything.
+    This is the main class that manages the whole AI application.
+    It contains references to all the main modules and is responsible for the bootstrapping of the application.
+
+    In most cases you will not need to interact with this class directly, but rather with class `StrayCat` which will be available in your plugin's hooks, tools, forms end endpoints.
 
     Attributes
     ----------
@@ -94,6 +99,9 @@ class CheshireCat:
         # Rabbit Hole Instance
         self.rabbit_hole = RabbitHole(self)  # :(
 
+        # Cache for sessions / working memories et al.
+        self.cache = CacheManager().cache
+
         # allows plugins to do something after the cat bootstrap is complete
         self.mad_hatter.execute_hook("after_cat_bootstrap", cat=self)
 
@@ -135,7 +143,7 @@ class CheshireCat:
         if selected_llm is None:
             # Return default LLM
             return LLMDefaultConfig.get_llm_from_config({})
-       
+
         # Get LLM factory class
         selected_llm_class = selected_llm["value"]["name"]
         FactoryClass = get_llm_from_name(selected_llm_class)
@@ -146,8 +154,7 @@ class CheshireCat:
             llm = FactoryClass.get_llm_from_config(selected_llm_config["value"])
             return llm
         except Exception:
-            import traceback
-            traceback.print_exc()
+            log.error("Error during LLM instantiation")
             return LLMDefaultConfig.get_llm_from_config({})
 
     def load_language_embedder(self) -> embedders.EmbedderSettings:
@@ -185,10 +192,8 @@ class CheshireCat:
                 embedder = FactoryClass.get_embedder_from_config(
                     selected_embedder_config["value"]
                 )
-            except AttributeError:
-                import traceback
-
-                traceback.print_exc()
+            except Exception:
+                log.error("Error during Embedder instantiation")
                 embedder = embedders.EmbedderDumbConfig.get_embedder_from_config({})
             return embedder
 
@@ -268,9 +273,7 @@ class CheshireCat:
                 selected_auth_handler_config["value"]
             )
         except Exception:
-            import traceback
-
-            traceback.print_exc()
+            log.error("Error during AuthHandler instantiation")
 
             auth_handler = (
                 auth_handlers.CoreOnlyAuthConfig.get_auth_handler_from_config({})
@@ -304,7 +307,6 @@ class CheshireCat:
     def build_embedded_procedures_hashes(self, embedded_procedures):
         hashes = {}
         for ep in embedded_procedures:
-            # log.warning(ep)
             metadata = ep.payload["metadata"]
             content = ep.payload["page_content"]
             source = metadata["source"]
@@ -364,13 +366,19 @@ class CheshireCat:
             embedded_procedures_hashes[p] for p in points_to_be_deleted
         ]
         if points_to_be_deleted_ids:
-            log.warning(f"Deleting triggers: {points_to_be_deleted}")
+            log.info("Deleting procedural triggers:")
+            log.info(points_to_be_deleted)
             self.memory.vectors.procedural.delete_points(points_to_be_deleted_ids)
 
         active_triggers_to_be_embedded = [
             active_procedures_hashes[p] for p in points_to_be_embedded
         ]
+        
+        if active_triggers_to_be_embedded:
+            log.info("Embedding new procedural triggers:")
         for t in active_triggers_to_be_embedded:
+
+
             metadata = {
                 "source": t["source"],
                 "type": t["type"],
@@ -385,12 +393,12 @@ class CheshireCat:
                 metadata,
             )
 
-            log.warning(
-                f"Newly embedded {t['type']} trigger: {t['source']}, {t['trigger_type']}, {t['content']}"
+            log.info(
+                f" {t['source']}.{t['trigger_type']}.{t['content']}"
             )
 
     def send_ws_message(self, content: str, msg_type="notification"):
-        log.error("No websocket connection open")
+        log.error("CheshireCat has no websocket connection. Call `send_ws_message` from a StrayCat instance.")
 
     # REFACTOR: cat.llm should be available here, without streaming clearly
     # (one could be interested in calling the LLM anytime, not only when there is a session)
@@ -417,7 +425,7 @@ class CheshireCat:
         # here we deal with motherfucking langchain
         prompt = ChatPromptTemplate(
             messages=[
-                SystemMessage(content=prompt)
+                HumanMessage(content=prompt)
             ]
         )
 
